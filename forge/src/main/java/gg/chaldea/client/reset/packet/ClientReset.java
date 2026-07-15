@@ -4,6 +4,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.util.NoSuchElementException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 import com.ibm.icu.impl.Pair;
@@ -111,9 +112,17 @@ public class ClientReset {
 		connection.channel().attr(NetworkConstants.FML_HANDSHAKE_HANDLER).set(null);
 		NetworkHooks.registerClientLoginChannel(connection);
 		connection.setProtocol(ConnectionProtocol.LOGIN);
+		// P2-4 修复：按 Forge 1.20.1-47.x ClientHandshakePacketListenerImpl 构造函数语义明确每个参数：
+		//   Connection connection            — 当前网络连接
+		//   Minecraft minecraft              — Minecraft 实例
+		//   ServerData serverData            — 目标服务器数据（非 null，reset 前已保存）
+		//   Screen parent                    — null（reset 场景无父屏幕）
+		//   boolean newWorld                  — false（连接到已有服务器，非新建单人世界）
+		//   Duration worldLoadDuration        — null（非世界加载场景，无加载超时）
+		//   Consumer<Component> statusUpdate — 空回调（reset 流程不显示状态消息）
 		connection.setListener(new ClientHandshakePacketListenerImpl(
-				connection, Minecraft.getInstance(),serverData, null,true,null,statusMessage -> {}
-		));//Watch This might cause issues Nulling things IDK what do lol and setting true what i dont know is???? Will Find out!
+				connection, Minecraft.getInstance(), serverData, null, false, null, statusMessage -> {}
+		));
 		Minecraft.getInstance().pendingConnection = connection;
 		context.setPacketHandled(true);
 		try {
@@ -163,11 +172,13 @@ public class ClientReset {
 
 		logger.debug(RESETMARKER, "Waiting for clear to complete");
 		try {
-			future.get();
+			// P2-3 修复：原实现 future.get() 无限等待，若网络线程等待 Minecraft 主线程
+			// 而主线程被阻塞，会导致连接永久挂起。添加 30 秒超时，超时后断开连接。
+			future.get(30, TimeUnit.SECONDS);
 			logger.debug("Clear complete, continuing reset");
 			return true;
 		} catch (Exception ex) {
-			logger.error(RESETMARKER, "Failed to clear, closing connection", ex);
+			logger.error(RESETMARKER, "Failed to clear (or timed out), closing connection", ex);
 			context.getNetworkManager().disconnect(Component.literal("Failed to clear, closing connection"));
 			return false;
 		}
