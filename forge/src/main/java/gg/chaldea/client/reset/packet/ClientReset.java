@@ -5,6 +5,7 @@ import java.lang.reflect.Field;
 import java.util.NoSuchElementException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 import com.ibm.icu.impl.Pair;
@@ -48,6 +49,10 @@ public class ClientReset {
 	public static final Constructor contextConstructor;
 	static final Logger logger = LogManager.getLogger();
 	static final Marker RESETMARKER = MarkerManager.getMarker("RESETPACKET").setParents(MarkerManager.getMarker("FMLNETWORK"));
+
+	// 10.1 修复：reset generation token，防止超时后旧 Runnable 晚到执行清理新连接状态。
+	// 每次 handleClear 开始时递增，Runnable 执行前校验；超时/新 reset 时再次递增使旧 token 失效。
+	private static final AtomicLong resetGeneration = new AtomicLong(0);
 
 	public static SimpleChannel handshakeChannel;
 
@@ -132,8 +137,11 @@ public class ClientReset {
 			);
 		}
 		catch (Exception e) {
-			logger.error(RESETMARKER, "Exception occurred when attempting to reply to reset packet.  Exception: " + e.getMessage());
-			context.setPacketHandled(false);
+			// 10.2 修复：reply 失败后连接处于半重置状态（listener/protocol 已切换但 ack 未发出）。
+			// 必须 fail-closed disconnect，不能只标记 packet 未处理后继续使用连接。
+			logger.error(RESETMARKER, "Exception occurred when attempting to reply to reset packet, disconnecting", e);
+			context.setPacketHandled(true);
+			connection.disconnect(Component.literal("Reset reply failed, closing connection"));
 			return;
 		}
 		logger.info(RESETMARKER, "Reset complete.");
@@ -141,7 +149,16 @@ public class ClientReset {
 
 	@OnlyIn(Dist.CLIENT)
 	public static boolean handleClear(NetworkEvent.Context context) {
+		// 10.1 修复：每次 reset 分配唯一 generation token。
+		// Runnable 在主线程执行前校验 token，若已过期（超时/新 reset/新连接）则跳过清理。
+		final long myGeneration = resetGeneration.incrementAndGet();
 		CompletableFuture<Void> future = context.enqueueWork(() -> {
+			// 10.1 修复：校验 generation，防止超时后排队的旧 Runnable 晚到执行并清理新连接状态。
+			if (resetGeneration.get() != myGeneration) {
+				logger.warn(RESETMARKER, "Skipping stale clear task (generation={} != current={})",
+						myGeneration, resetGeneration.get());
+				return;
+			}
 			logger.debug(RESETMARKER, "Clearing");
 
 			// Preserve
@@ -178,6 +195,9 @@ public class ClientReset {
 			logger.debug("Clear complete, continuing reset");
 			return true;
 		} catch (Exception ex) {
+			// 10.1 修复：超时后递增 generation，使仍排在主线程队列中的旧 Runnable 失效。
+			// 旧 Runnable 执行时会检测到 generation 不匹配而跳过，避免清理新连接状态。
+			resetGeneration.incrementAndGet();
 			logger.error(RESETMARKER, "Failed to clear (or timed out), closing connection", ex);
 			context.getNetworkManager().disconnect(Component.literal("Failed to clear, closing connection"));
 			return false;
