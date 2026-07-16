@@ -144,6 +144,12 @@ public class ClientReset {
 				)
 		);
 
+		// 审核报告 P1-03：Channel 在 HUD 等待期间关闭时，取消 HUD 避免 fallback
+		// 在断线后继续启动 clearLevel / LOGIN listener 重建。
+		connection.channel().closeFuture().addListener(ignored ->
+				ServerSwitchPreparationOverlay.cancel(generation)
+		);
+
 		logger.info(
 				RESETMARKER,
 				"Preparation HUD activated before old-world cleanup "
@@ -166,6 +172,22 @@ public class ClientReset {
 			ServerData serverData,
 			long generation
 	) {
+		// 审核报告 P1-03：HUD 等待期间 Channel 可能已关闭（断线/超时/客户端关闭），
+		// 已关闭 Channel 的 Attribute 仍可能保留原 generation，仅校验 generation 不够。
+		// 此时不应继续 clearLevel / LOGIN listener 重建 / 向关闭 Channel 提交任务。
+		if (!connection.channel().isActive()) {
+			ServerSwitchPreparationOverlay.cancel(generation);
+
+			logger.info(
+					RESETMARKER,
+					"Skipping old-world cleanup because the connection "
+							+ "closed before preparation completed "
+							+ "(generation={})",
+					generation
+			);
+			return;
+		}
+
 		if (!ResetConnectionState.isCurrent(
 				connection.channel(),
 				generation
@@ -181,11 +203,27 @@ public class ClientReset {
 			return;
 		}
 
-		CompletableFuture<Void> clearFuture = enqueueClear(
-				context,
-				connection,
-				generation
-		);
+		// 审核报告 P2：enqueueClear 同步抛出（executor 拒绝、context 失效等）会从
+		// ClientTickEvent 监听器向外传播，且此时 state 已清空、autoRead 仍为 false。
+		// 必须捕获并走 failReset 进入 FAILED fence + 断线，避免半初始化活连接。
+		CompletableFuture<Void> clearFuture;
+		try {
+			clearFuture = enqueueClear(
+					context,
+					connection,
+					generation
+			);
+		} catch (Throwable error) {
+			connection.channel().eventLoop().execute(() ->
+					failReset(
+							connection,
+							generation,
+							"clientresetpacket.disconnect.clear_failed",
+							error
+					)
+			);
+			return;
+		}
 
 		clearFuture.orTimeout(30, TimeUnit.SECONDS)
 				.whenComplete((ignored, error) ->

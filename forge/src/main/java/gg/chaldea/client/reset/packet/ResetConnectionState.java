@@ -52,9 +52,18 @@ public final class ResetConnectionState {
      * 开始一次新的 reset：分配新 generation，标记进入 CLEARING_OLD_WORLD 阶段，
      * 并显式暂停入站读取（文档§3.5）。
      *
-     * @return 本次 reset 的 generation，后续所有异步回调都需校验此值
+     * <p>审核报告 P1-02：若当前已处于 reset 活动阶段（非 PLAY_ACTIVE），拒绝重复 reset
+     * 并返回 -1，避免覆盖 PREVIOUS_AUTO_READ 导致 autoRead 永久关闭。reset packet 在
+     * 同一 Channel event loop 中处理，phase 检查与状态写入不会被同 Channel 的另一个
+     * reset 并发穿透。
+     *
+     * @return 本次 reset 的 generation，后续所有异步回调都需校验此值；已有 reset 活动时返回 -1
      */
     public static long begin(Channel channel) {
+        if (phase(channel) != Phase.PLAY_ACTIVE) {
+            return -1L;
+        }
+
         long generation = NEXT_GENERATION.incrementAndGet();
         channel.attr(GENERATION).set(generation);
         channel.attr(PHASE).set(Phase.CLEARING_OLD_WORLD);

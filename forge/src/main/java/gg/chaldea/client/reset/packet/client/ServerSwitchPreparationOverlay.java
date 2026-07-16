@@ -6,7 +6,7 @@ import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.network.chat.Component;
 import net.minecraftforge.api.distmarker.Dist;
-import net.minecraftforge.client.event.RenderGuiOverlayEvent;
+import net.minecraftforge.client.event.RenderGuiEvent;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
@@ -84,8 +84,11 @@ public final class ServerSwitchPreparationOverlay {
         return current != null && !current.cancelled.get();
     }
 
+    // 审核报告 P1-01：使用 RenderGuiEvent.Post 而非 RenderGuiOverlayEvent.Post。
+    // RenderGuiOverlayEvent.Post 在每个 overlay 渲染后触发（同帧多次），会导致半透明
+    // 背景重复叠加变黑；RenderGuiEvent.Post 在整个 HUD 渲染完成后每帧只触发一次。
     @SubscribeEvent
-    public static void onRenderGuiOverlay(RenderGuiOverlayEvent.Post event) {
+    public static void onRenderGui(RenderGuiEvent.Post event) {
         State current = state;
         if (current == null || current.cancelled.get()) {
             return;

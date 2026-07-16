@@ -21,7 +21,7 @@ subprojects {
         into('../release/')
         include '*.jar'
         rename { String filename ->
-            // P1-08 补充：成品 jar 统一命名为 HFCfastserverforge-{version}.jar
+            // P1-08 补充：成品 jar 统一命名为 hfc_fastserverforge-{version}.jar
             filename.replace("forge-${project.version}.jar", "hfc_fastserverforge-${project.version}.jar")
         }
     }
