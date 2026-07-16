@@ -22,6 +22,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>阶段流转：
  * <pre>
  * PLAY_ACTIVE → CLEARING_OLD_WORLD → LOGIN_NEGOTIATING → PLAY_ACTIVE(complete)
+ *                  ↘ FAILED（失败后保持 fence 直到 Channel 关闭）
  * </pre>
  */
 public final class ResetConnectionState {
@@ -29,7 +30,8 @@ public final class ResetConnectionState {
     public enum Phase {
         PLAY_ACTIVE,
         CLEARING_OLD_WORLD,
-        LOGIN_NEGOTIATING
+        LOGIN_NEGOTIATING,
+        FAILED
     }
 
     private static final AtomicLong NEXT_GENERATION = new AtomicLong();
@@ -40,11 +42,15 @@ public final class ResetConnectionState {
             AttributeKey.valueOf("clientresetpacket:reset_phase");
     private static final AttributeKey<Integer> DROPPED_PACKETS =
             AttributeKey.valueOf("clientresetpacket:dropped_stale_packets");
+    // 文档§3.5/§4.1：非阻塞 reset 开始时显式暂停入站读取，替代原阻塞实现的隐式暂停效果。
+    private static final AttributeKey<Boolean> PREVIOUS_AUTO_READ =
+            AttributeKey.valueOf("clientresetpacket:previous_auto_read");
 
     private ResetConnectionState() {}
 
     /**
-     * 开始一次新的 reset：分配新 generation，标记进入 CLEARING_OLD_WORLD 阶段。
+     * 开始一次新的 reset：分配新 generation，标记进入 CLEARING_OLD_WORLD 阶段，
+     * 并显式暂停入站读取（文档§3.5）。
      *
      * @return 本次 reset 的 generation，后续所有异步回调都需校验此值
      */
@@ -53,7 +59,25 @@ public final class ResetConnectionState {
         channel.attr(GENERATION).set(generation);
         channel.attr(PHASE).set(Phase.CLEARING_OLD_WORLD);
         channel.attr(DROPPED_PACKETS).set(0);
+        channel.attr(PREVIOUS_AUTO_READ).set(channel.config().isAutoRead());
+        channel.config().setAutoRead(false);
         return generation;
+    }
+
+    /**
+     * 清理完成、LOGIN protocol 和 listener 建立、ACK 写出后恢复入站读取（文档§3.5/§4.1）。
+     *
+     * <p>仅当 generation 匹配时恢复，防止旧 reset 任务污染新状态。
+     * 仅在 reset 前处于 autoRead=true 时才重新开启。
+     */
+    public static void resumeReads(Channel channel, long generation) {
+        if (!isCurrent(channel, generation)) {
+            return;
+        }
+        Boolean previous = channel.attr(PREVIOUS_AUTO_READ).getAndSet(null);
+        if (Boolean.TRUE.equals(previous)) {
+            channel.config().setAutoRead(true);
+        }
     }
 
     /**
@@ -92,11 +116,15 @@ public final class ResetConnectionState {
     }
 
     /**
-     * 使当前 channel 的 generation 失效（用于失败路径强制解除 fence）。
+     * 失败路径：使当前 generation 失效，但保持 fence（文档§3.4/§4.1）。
+     *
+     * <p>不立即切回 PLAY_ACTIVE。phase 设为 FAILED，使 PacketEncoder fence 继续
+     * 丢弃所有出站包，直到 Channel 真正关闭。避免连接关闭前旧 PLAY 包再次进入
+     * 原版编码器触发 {@code Can't serialize unregistered packet}。
      */
-    public static void invalidate(Channel channel) {
+    public static void fail(Channel channel) {
         channel.attr(GENERATION).set(NEXT_GENERATION.incrementAndGet());
-        channel.attr(PHASE).set(Phase.PLAY_ACTIVE);
+        channel.attr(PHASE).set(Phase.FAILED);
     }
 
     /**

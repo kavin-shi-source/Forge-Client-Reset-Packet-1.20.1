@@ -8,6 +8,7 @@ import net.minecraft.network.PacketEncoder;
 import net.minecraft.network.PacketListener;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.PacketFlow;
+import net.minecraft.network.protocol.login.ServerboundCustomQueryPacket;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -25,13 +26,19 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  *
  * <p>本 mixin 在 {@link PacketEncoder#encode} 前增加仅限 reset 期间的保护：
  * <ul>
- *   <li>只在 FCRP reset active 时生效</li>
- *   <li>当前协议已经注册的包继续发送</li>
- *   <li>当前协议没有注册的包丢弃并打印真实 packetClass 诊断</li>
- *   <li>reset 结束后完全恢复原版行为</li>
+ *   <li>PLAY_ACTIVE：完全不影响正常游戏和 BO 带宽优化</li>
+ *   <li>CLEARING_OLD_WORLD：丢弃全部旧出站包（文档§3.2）</li>
+ *   <li>LOGIN_NEGOTIATING：只允许当前 LOGIN 注册包和 Forge query</li>
+ *   <li>FAILED：继续保持 fence（文档§3.4）</li>
  * </ul>
+ *
+ * <p><b>文档§3.3 修复</b>：Mixin priority 设为 {@code 900}，低于 BO 默认 priority
+ * {@code 1000}，使 BO 的 {@code PacketOutPipeMixin} 有机会先对
+ * {@link ServerboundCustomQueryPacket} 执行特殊 LOGIN 编码，避免 FCRP 把 Forge
+ * 握手 ACK 当成“旧未注册包”静默吞掉。同时在 LOGIN_NEGOTIATING 阶段明确放行
+ * {@link ServerboundCustomQueryPacket}，即使未安装 BO 也能由原版注册表正常编码。
  */
-@Mixin(PacketEncoder.class)
+@Mixin(value = PacketEncoder.class, priority = 900)
 public abstract class MixinPacketEncoderResetFence<T extends PacketListener> {
 
     @Shadow
@@ -49,14 +56,34 @@ public abstract class MixinPacketEncoderResetFence<T extends PacketListener> {
             ByteBuf output,
             CallbackInfo callback
     ) {
-        if (context == null
-                || context.channel() == null
-                || packet == null
-                || !ResetConnectionState.isResetActive(context.channel())) {
+        if (context == null || context.channel() == null || packet == null) {
             return;
         }
 
-        if (ResetConnectionState.isRegistered(context.channel(), this.flow, packet)) {
+        ResetConnectionState.Phase phase =
+                ResetConnectionState.phase(context.channel());
+
+        if (phase == ResetConnectionState.Phase.PLAY_ACTIVE) {
+            return;
+        }
+
+        // Forge LOGIN query 是切服握手所必需的。
+        // FCRP 的 priority 低于 BO，使 BO 有机会先执行特殊编码。
+        if (phase == ResetConnectionState.Phase.LOGIN_NEGOTIATING
+                && packet instanceof ServerboundCustomQueryPacket) {
+            return;
+        }
+
+        boolean shouldDrop =
+                phase == ResetConnectionState.Phase.CLEARING_OLD_WORLD
+                        || phase == ResetConnectionState.Phase.FAILED
+                        || !ResetConnectionState.isRegistered(
+                                context.channel(),
+                                this.flow,
+                                packet
+                        );
+
+        if (!shouldDrop) {
             return;
         }
 
@@ -65,10 +92,10 @@ public abstract class MixinPacketEncoderResetFence<T extends PacketListener> {
         if (dropCount <= 10 || dropCount % 64 == 0) {
             ClientReset.logger.warn(
                     ClientReset.RESETMARKER,
-                    "Dropped stale outbound packet during reset. "
+                    "Dropped outbound packet during reset. "
                             + "phase={}, flow={}, packetClass={}, "
                             + "dropCount={}, channel={}",
-                    ResetConnectionState.phase(context.channel()),
+                    phase,
                     this.flow,
                     packet.getClass().getName(),
                     dropCount,

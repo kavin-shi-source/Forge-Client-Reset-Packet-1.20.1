@@ -258,6 +258,11 @@ public class ClientReset {
 					)
 			);
 
+			// 文档§3.5/§4.4：ACK 写出后恢复入站读取，并显示"等待目标服登录"阶段提示。
+			// 顺序：setProtocol(LOGIN) → setListener(LOGIN) → 写出 ACK → 恢复 autoRead → showStatus(login)
+			ResetConnectionState.resumeReads(connection.channel(), generation);
+			showStatus("clientresetpacket.status.login");
+
 			logger.info(
 					RESETMARKER,
 					"Reset entered LOGIN negotiation generation={}",
@@ -274,9 +279,10 @@ public class ClientReset {
 	}
 
 	/**
-	 * 文档§五：reset 失败时 fail-closed。
+	 * 文档§五/§3.4：reset 失败时 fail-closed。
 	 *
-	 * <p>使当前 generation 失效（解除 PacketEncoder fence），并断开连接显示中文原因。
+	 * <p>使当前 generation 失效但保持 fence（phase 设为 FAILED），并断开连接显示中文原因。
+	 * fence 保持到 Channel 真正关闭，避免连接关闭前旧 PLAY 包再次进入原版编码器报错。
 	 */
 	private static void failReset(
 			Connection connection,
@@ -291,7 +297,7 @@ public class ClientReset {
 				connection.channel().id().asLongText(),
 				error
 		);
-		ResetConnectionState.invalidate(connection.channel());
+		ResetConnectionState.fail(connection.channel());
 		lastStatusKey = null;
 		connection.disconnect(Component.translatable(translationKey));
 	}

@@ -10,12 +10,15 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * 文档§七：重新进入 PLAY 后解除 fence。
+ * 文档§七/§4.3：重新进入 PLAY 后解除 fence。
  *
  * <p>真正的 reset 完成应发生在连接重新进入 PLAY 协议后，而非刚切换到 LOGIN 时。
- * 本 mixin 在 {@link Connection#setProtocol} 返回后观察协议变化：
- * 当协议变为 {@link ConnectionProtocol#PLAY} 且 reset 仍处于活跃阶段时，
- * 调用 {@link ResetConnectionState#complete} 解除 PacketEncoder fence。
+ * 本 mixin 在 {@link Connection#setProtocol} 返回后观察协议变化：仅当协议变为
+ * {@link ConnectionProtocol#PLAY} 且当前 phase 为 {@link ResetConnectionState.Phase#LOGIN_NEGOTIATING}
+ * 时才调用 {@link ResetConnectionState#complete} 解除 PacketEncoder fence。
+ *
+ * <p>文档§3.4 修复：FAILED 或 CLEARING_OLD_WORLD 阶段不会因某次意外
+ * {@code setProtocol(PLAY)} 而提前 complete，避免 fence 被过早解除。
  */
 @Mixin(Connection.class)
 public abstract class MixinConnectionProtocol {
@@ -31,7 +34,8 @@ public abstract class MixinConnectionProtocol {
         Connection connection = (Connection) (Object) this;
 
         if (protocol != ConnectionProtocol.PLAY
-                || !ResetConnectionState.isResetActive(connection.channel())) {
+                || ResetConnectionState.phase(connection.channel())
+                != ResetConnectionState.Phase.LOGIN_NEGOTIATING) {
             return;
         }
 
