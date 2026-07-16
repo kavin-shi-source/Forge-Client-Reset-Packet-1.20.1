@@ -3,6 +3,8 @@
   "clientresetpacket.status.clearing": "Clearing data from the previous server. Please do not disconnect…",
   "clientresetpacket.status.connecting": "Connecting to the target server…",
   "clientresetpacket.status.login": "Waiting for the target server to finish login…",
+  "clientresetpacket.overlay.preparing": "Preparing cross-server data. Please wait…",
+  "clientresetpacket.overlay.warning": "Please do not move, interact, or disconnect",
   "clientresetpacket.disconnect.illegal_packet": "The server-switch protocol failed and the connection was closed safely.",
   "clientresetpacket.disconnect.clear_failed": "Clearing the previous server timed out. Please reconnect.",
   "clientresetpacket.disconnect.login_failed": "Unable to connect to the target server. Please return to the server list and try again."

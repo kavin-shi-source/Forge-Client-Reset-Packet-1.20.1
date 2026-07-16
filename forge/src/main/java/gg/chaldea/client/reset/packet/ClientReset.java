@@ -6,6 +6,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
+import gg.chaldea.client.reset.packet.client.ServerSwitchPreparationOverlay;
 import gg.chaldea.client.reset.packet.network.S2CReset;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.packs.repository.Pack;
@@ -42,6 +43,7 @@ import net.minecraftforge.registries.GameData;
 @Mod("clientresetpacket")
 public class ClientReset {
 
+	public static final String MODID = "clientresetpacket";
 	public static final Field handshakeField;
 	public static final Constructor contextConstructor;
 	public static final Logger logger = LogManager.getLogger();
@@ -120,41 +122,105 @@ public class ClientReset {
 		// 之后调用会返回 null，导致 Xaero's World Map 生成 "Multiplayer_Unknown" 目录
 		ServerData serverData = Minecraft.getInstance().getCurrentServer();
 		long generation = ResetConnectionState.begin(connection.channel());
+		if (generation < 0L) {
+			logger.warn(
+					RESETMARKER,
+					"Ignoring duplicate reset while phase={}",
+					ResetConnectionState.phase(connection.channel())
+			);
+			context.setPacketHandled(true);
+			return;
+		}
 
-		showStatus("clientresetpacket.status.switching");
+		context.setPacketHandled(true);
+
+		ServerSwitchPreparationOverlay.begin(
+				generation,
+				() -> startClearAfterPreparation(
+						context,
+						connection,
+						serverData,
+						generation
+				)
+		);
+
 		logger.info(
 				RESETMARKER,
-				"Starting reset generation={} channel={}",
+				"Preparation HUD activated before old-world cleanup "
+						+ "(generation={}, channel={})",
 				generation,
 				connection.channel().id().asLongText()
 		);
+	}
 
-		CompletableFuture<Void> clearFuture = enqueueClear(context, connection, generation);
+	/**
+	 * 文档§7.3：HUD 首帧完成后开始旧世界清理。
+	 *
+	 * <p>从 {@link ServerSwitchPreparationOverlay#begin} 的回调调用。重新校验 generation，
+	 * 然后执行原 {@code enqueueClear} + {@code orTimeout} + {@code whenComplete} 流程。
+	 */
+	@OnlyIn(Dist.CLIENT)
+	private static void startClearAfterPreparation(
+			NetworkEvent.Context context,
+			Connection connection,
+			ServerData serverData,
+			long generation
+	) {
+		if (!ResetConnectionState.isCurrent(
+				connection.channel(),
+				generation
+		)) {
+			ServerSwitchPreparationOverlay.cancel(generation);
 
-		clearFuture.orTimeout(30, TimeUnit.SECONDS).whenComplete((ignored, error) -> {
-			connection.channel().eventLoop().execute(() -> {
-				if (!ResetConnectionState.isCurrent(connection.channel(), generation)) {
-					logger.warn(
-							RESETMARKER,
-							"Ignoring stale reset completion generation={}",
-							generation
-					);
-					return;
-				}
+			logger.warn(
+					RESETMARKER,
+					"Skipping old-world cleanup for stale reset "
+							+ "generation={}",
+					generation
+			);
+			return;
+		}
 
-				if (error != null) {
-					failReset(
-							connection,
-							generation,
-							"clientresetpacket.disconnect.clear_failed",
-							error
-					);
-					return;
-				}
+		CompletableFuture<Void> clearFuture = enqueueClear(
+				context,
+				connection,
+				generation
+		);
 
-				continueLoginReset(context, connection, serverData, generation);
-			});
-		});
+		clearFuture.orTimeout(30, TimeUnit.SECONDS)
+				.whenComplete((ignored, error) ->
+						connection.channel().eventLoop().execute(() -> {
+							if (!ResetConnectionState.isCurrent(
+									connection.channel(),
+									generation
+							)) {
+								logger.warn(
+										RESETMARKER,
+										"Ignoring stale reset completion "
+												+ "generation={}",
+										generation
+								);
+								return;
+							}
+
+							if (error != null) {
+								failReset(
+										connection,
+										generation,
+										"clientresetpacket.disconnect.clear_failed",
+										error
+								);
+								return;
+							}
+
+							continueLoginReset(
+									context,
+									connection,
+									serverData,
+									generation
+							);
+						})
+				);
 	}
 
 	/**
@@ -177,7 +243,7 @@ public class ClientReset {
 			}
 
 			logger.debug(RESETMARKER, "Clearing");
-			showStatus("clientresetpacket.status.clearing");
+		showStatusNow("clientresetpacket.status.clearing");
 
 			// Preserve
 			Pack serverPack = Minecraft.getInstance().getDownloadedPackSource().serverPack;
@@ -279,10 +345,11 @@ public class ClientReset {
 	}
 
 	/**
-	 * 文档§五/§3.4：reset 失败时 fail-closed。
+	 * 文档§五/§3.4/§7.5：reset 失败时 fail-closed。
 	 *
-	 * <p>使当前 generation 失效但保持 fence（phase 设为 FAILED），并断开连接显示中文原因。
-	 * fence 保持到 Channel 真正关闭，避免连接关闭前旧 PLAY 包再次进入原版编码器报错。
+	 * <p>先取消前置 HUD（若仍活动），使当前 generation 失效但保持 fence（phase 设为 FAILED），
+	 * 并断开连接显示中文原因。fence 保持到 Channel 真正关闭，避免连接关闭前旧 PLAY 包再次
+	 * 进入原版编码器报错。
 	 */
 	private static void failReset(
 			Connection connection,
@@ -290,6 +357,7 @@ public class ClientReset {
 			String translationKey,
 			Throwable error
 	) {
+		ServerSwitchPreparationOverlay.cancel(generation);
 		logger.error(
 				RESETMARKER,
 				"Reset failed generation={} channel={}",
@@ -303,7 +371,7 @@ public class ClientReset {
 	}
 
 	/**
-	 * 文档§八：向玩家显示当前阶段提示。
+	 * 文档§八/§7.4：向玩家显示当前阶段提示（异步调度版）。
 	 *
 	 * <p>所有 UI 操作必须在 Minecraft 主线程执行；若从 Netty 线程调用，通过
 	 * {@code Minecraft.getInstance().execute(...)} 调度。只在阶段变化时更新一次，
@@ -311,19 +379,26 @@ public class ClientReset {
 	 */
 	@OnlyIn(Dist.CLIENT)
 	private static void showStatus(String translationKey) {
+		Minecraft.getInstance().execute(
+				() -> showStatusNow(translationKey)
+		);
+	}
+
+	/**
+	 * 文档§7.4：在 Minecraft 主线程内同步显示提示。
+	 *
+	 * <p>调用方必须已处于 Minecraft 主线程（如 {@code enqueueClear} 内部），
+	 * 不需要再次排队。只在阶段变化时更新一次。
+	 */
+	@OnlyIn(Dist.CLIENT)
+	private static void showStatusNow(String translationKey) {
 		if (translationKey.equals(lastStatusKey)) {
 			return;
 		}
 		lastStatusKey = translationKey;
-		Minecraft minecraft = Minecraft.getInstance();
-		Runnable action = () -> minecraft.setScreen(
+		Minecraft.getInstance().setScreen(
 				new GenericDirtMessageScreen(Component.translatable(translationKey))
 		);
-		if (minecraft.isSameThread()) {
-			action.run();
-		} else {
-			minecraft.execute(action);
-		}
 	}
 
 	private static Field fetchHandshakeChannel() {
