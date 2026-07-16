@@ -1,0 +1,9 @@
+{
+  "clientresetpacket.status.switching": "正在切换服务器，请稍候……",
+  "clientresetpacket.status.clearing": "正在清理旧服务器数据，请勿退出……",
+  "clientresetpacket.status.connecting": "正在连接目标服务器……",
+  "clientresetpacket.status.login": "正在等待目标服务器完成登录……",
+  "clientresetpacket.disconnect.illegal_packet": "服务器切换协议异常，连接已安全关闭。",
+  "clientresetpacket.disconnect.clear_failed": "清理旧服务器数据超时，切服失败，请重新连接。",
+  "clientresetpacket.disconnect.login_failed": "连接目标服务器失败，请返回服务器列表后重试。"
+}
