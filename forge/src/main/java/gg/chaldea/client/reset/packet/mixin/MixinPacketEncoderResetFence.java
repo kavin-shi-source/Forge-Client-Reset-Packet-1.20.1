@@ -17,7 +17,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * 文档§六：FCRP 自己的旧 PLAY 出站 fence。
+ * FCRP 自己的旧 PLAY 出站 fence。
  *
  * <p>仅仅取消 Netty 阻塞仍不够。reset 开始之前，某些其他线程可能已经提交了发送任务；
  * 或 reset 期间仍有旧世界模组异步调用 {@code Connection.send()}。即使 event loop
@@ -27,12 +27,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * <p>本 mixin 在 {@link PacketEncoder#encode} 前增加仅限 reset 期间的保护：
  * <ul>
  *   <li>PLAY_ACTIVE：完全不影响正常游戏和 BO 带宽优化</li>
- *   <li>CLEARING_OLD_WORLD：丢弃全部旧出站包（文档§3.2）</li>
+ *   <li>CLEARING_OLD_WORLD：丢弃全部旧出站包</li>
  *   <li>LOGIN_NEGOTIATING：只允许当前 LOGIN 注册包和 Forge query</li>
- *   <li>FAILED：继续保持 fence（文档§3.4）</li>
+ *   <li>FAILED：继续保持 fence</li>
  * </ul>
  *
- * <p><b>文档§3.3 修复</b>：Mixin priority 设为 {@code 900}，低于 BO 默认 priority
+ * <p>Mixin priority 设为 {@code 900}，低于 BO 默认 priority
  * {@code 1000}，使 BO 的 {@code PacketOutPipeMixin} 有机会先对
  * {@link ServerboundCustomQueryPacket} 执行特殊 LOGIN 编码，避免 FCRP 把 Forge
  * 握手 ACK 当成“旧未注册包”静默吞掉。同时在 LOGIN_NEGOTIATING 阶段明确放行

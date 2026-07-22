@@ -85,6 +85,7 @@ nb-configuration.xml
 ##############################
 ## Project specific
 ##############################
+src/test/
 release/
 *.md
 !README.md

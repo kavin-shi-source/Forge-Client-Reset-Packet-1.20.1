@@ -51,7 +51,7 @@ public class ClientReset {
 
 	public static SimpleChannel handshakeChannel;
 
-	// 文档§八：跟踪上一次显示的阶段 key，避免重复创建相同屏幕。
+	// 跟踪上一次显示的阶段 key，避免重复创建相同屏幕。
 	private static volatile String lastStatusKey;
 
 	public ClientReset() {
@@ -92,7 +92,7 @@ public class ClientReset {
 	}
 
 	/**
-	 * 文档§五：非阻塞 reset。
+	 * 非阻塞 reset。
 	 *
 	 * <p>关键变化：
 	 * <ul>
@@ -144,7 +144,7 @@ public class ClientReset {
 				)
 		);
 
-		// 审核报告 P1-03：Channel 在 HUD 等待期间关闭时，取消 HUD 避免 fallback
+		// Channel 在 HUD 等待期间关闭时，取消 HUD 避免 fallback
 		// 在断线后继续启动 clearLevel / LOGIN listener 重建。
 		connection.channel().closeFuture().addListener(ignored ->
 				ServerSwitchPreparationOverlay.cancel(generation)
@@ -160,7 +160,7 @@ public class ClientReset {
 	}
 
 	/**
-	 * 文档§7.3：HUD 首帧完成后开始旧世界清理。
+	 * HUD 首帧完成后开始旧世界清理。
 	 *
 	 * <p>从 {@link ServerSwitchPreparationOverlay#begin} 的回调调用。重新校验 generation，
 	 * 然后执行原 {@code enqueueClear} + {@code orTimeout} + {@code whenComplete} 流程。
@@ -172,7 +172,7 @@ public class ClientReset {
 			ServerData serverData,
 			long generation
 	) {
-		// 审核报告 P1-03：HUD 等待期间 Channel 可能已关闭（断线/超时/客户端关闭），
+		// HUD 等待期间 Channel 可能已关闭（断线/超时/客户端关闭），
 		// 已关闭 Channel 的 Attribute 仍可能保留原 generation，仅校验 generation 不够。
 		// 此时不应继续 clearLevel / LOGIN listener 重建 / 向关闭 Channel 提交任务。
 		if (!connection.channel().isActive()) {
@@ -203,7 +203,7 @@ public class ClientReset {
 			return;
 		}
 
-		// 审核报告 P2：enqueueClear 同步抛出（executor 拒绝、context 失效等）会从
+		// enqueueClear 同步抛出（executor 拒绝、context 失效等）会从
 		// ClientTickEvent 监听器向外传播，且此时 state 已清空、autoRead 仍为 false。
 		// 必须捕获并走 failReset 进入 FAILED fence + 断线，避免半初始化活连接。
 		CompletableFuture<Void> clearFuture;
@@ -262,7 +262,7 @@ public class ClientReset {
 	}
 
 	/**
-	 * 文档§5.2：提交清理任务到主线程，返回 CompletableFuture 而不阻塞网络线程。
+	 * 提交清理任务到主线程，返回 CompletableFuture 而不阻塞网络线程。
 	 */
 	@OnlyIn(Dist.CLIENT)
 	private static CompletableFuture<Void> enqueueClear(
@@ -307,7 +307,7 @@ public class ClientReset {
 	}
 
 	/**
-	 * 文档§5.2：安全移除 pipeline handler，不再依靠捕获 NoSuchElementException。
+	 * 安全移除 pipeline handler，不再依靠捕获 NoSuchElementException。
 	 */
 	private static void removePipelineHandler(Connection connection, String name) {
 		if (connection.channel().pipeline().get(name) != null) {
@@ -316,7 +316,7 @@ public class ClientReset {
 	}
 
 	/**
-	 * 文档§5.3：清理完成后继续 LOGIN reset。
+	 * 清理完成后继续 LOGIN reset。
 	 *
 	 * <p>此时不能立刻把 reset 标记为完成；真正的 complete 发生在连接重新进入 PLAY 后
 	 * （由 {@code MixinConnectionProtocol} 触发）。
@@ -340,7 +340,7 @@ public class ClientReset {
 			ResetConnectionState.beginLogin(connection.channel(), generation);
 
 			connection.setProtocol(ConnectionProtocol.LOGIN);
-			// P2-4 修复：按 Forge 1.20.1-47.x ClientHandshakePacketListenerImpl 构造函数语义明确每个参数：
+			// 按 Forge 1.20.1-47.x ClientHandshakePacketListenerImpl 构造函数语义明确每个参数：
 			//   Connection connection            — 当前网络连接
 			//   Minecraft minecraft              — Minecraft 实例
 			//   ServerData serverData            — 目标服务器数据（非 null，reset 前已保存）
@@ -362,7 +362,7 @@ public class ClientReset {
 					)
 			);
 
-			// 文档§3.5/§4.4：ACK 写出后恢复入站读取，并显示"等待目标服登录"阶段提示。
+			// ACK 写出后恢复入站读取，并显示"等待目标服登录"阶段提示。
 			// 顺序：setProtocol(LOGIN) → setListener(LOGIN) → 写出 ACK → 恢复 autoRead → showStatus(login)
 			ResetConnectionState.resumeReads(connection.channel(), generation);
 			showStatus("clientresetpacket.status.login");
@@ -383,7 +383,7 @@ public class ClientReset {
 	}
 
 	/**
-	 * 文档§五/§3.4/§7.5：reset 失败时 fail-closed。
+	 * reset 失败时 fail-closed。
 	 *
 	 * <p>先取消前置 HUD（若仍活动），使当前 generation 失效但保持 fence（phase 设为 FAILED），
 	 * 并断开连接显示中文原因。fence 保持到 Channel 真正关闭，避免连接关闭前旧 PLAY 包再次
@@ -409,7 +409,7 @@ public class ClientReset {
 	}
 
 	/**
-	 * 文档§八/§7.4：向玩家显示当前阶段提示（异步调度版）。
+	 * 向玩家显示当前阶段提示（异步调度版）。
 	 *
 	 * <p>所有 UI 操作必须在 Minecraft 主线程执行；若从 Netty 线程调用，通过
 	 * {@code Minecraft.getInstance().execute(...)} 调度。只在阶段变化时更新一次，
@@ -423,7 +423,7 @@ public class ClientReset {
 	}
 
 	/**
-	 * 文档§7.4：在 Minecraft 主线程内同步显示提示。
+	 * 在 Minecraft 主线程内同步显示提示。
 	 *
 	 * <p>调用方必须已处于 Minecraft 主线程（如 {@code enqueueClear} 内部），
 	 * 不需要再次排队。只在阶段变化时更新一次。

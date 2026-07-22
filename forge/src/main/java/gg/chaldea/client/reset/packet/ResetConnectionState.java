@@ -10,7 +10,7 @@ import net.minecraft.network.protocol.PacketFlow;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * FCRP 连接级 reset 状态机（文档§四）。
+ * FCRP 连接级 reset 状态机。
  *
  * <p>状态必须绑定 {@link Channel}，不能继续只使用全局 {@code AtomicLong}：
  * <ul>
@@ -42,7 +42,7 @@ public final class ResetConnectionState {
             AttributeKey.valueOf("clientresetpacket:reset_phase");
     private static final AttributeKey<Integer> DROPPED_PACKETS =
             AttributeKey.valueOf("clientresetpacket:dropped_stale_packets");
-    // 文档§3.5/§4.1：非阻塞 reset 开始时显式暂停入站读取，替代原阻塞实现的隐式暂停效果。
+    // 非阻塞 reset 开始时显式暂停入站读取，替代原阻塞实现的隐式暂停效果。
     private static final AttributeKey<Boolean> PREVIOUS_AUTO_READ =
             AttributeKey.valueOf("clientresetpacket:previous_auto_read");
 
@@ -50,9 +50,9 @@ public final class ResetConnectionState {
 
     /**
      * 开始一次新的 reset：分配新 generation，标记进入 CLEARING_OLD_WORLD 阶段，
-     * 并显式暂停入站读取（文档§3.5）。
+     * 并显式暂停入站读取。
      *
-     * <p>审核报告 P1-02：若当前已处于 reset 活动阶段（非 PLAY_ACTIVE），拒绝重复 reset
+     * <p>若当前已处于 reset 活动阶段（非 PLAY_ACTIVE），拒绝重复 reset
      * 并返回 -1，避免覆盖 PREVIOUS_AUTO_READ 导致 autoRead 永久关闭。reset packet 在
      * 同一 Channel event loop 中处理，phase 检查与状态写入不会被同 Channel 的另一个
      * reset 并发穿透。
@@ -74,7 +74,7 @@ public final class ResetConnectionState {
     }
 
     /**
-     * 清理完成、LOGIN protocol 和 listener 建立、ACK 写出后恢复入站读取（文档§3.5/§4.1）。
+     * 清理完成、LOGIN protocol 和 listener 建立、ACK 写出后恢复入站读取。
      *
      * <p>仅当 generation 匹配时恢复，防止旧 reset 任务污染新状态。
      * 仅在 reset 前处于 autoRead=true 时才重新开启。
@@ -125,7 +125,7 @@ public final class ResetConnectionState {
     }
 
     /**
-     * 失败路径：使当前 generation 失效，但保持 fence（文档§3.4/§4.1）。
+     * 失败路径：使当前 generation 失效，但保持 fence。
      *
      * <p>不立即切回 PLAY_ACTIVE。phase 设为 FAILED，使 PacketEncoder fence 继续
      * 丢弃所有出站包，直到 Channel 真正关闭。避免连接关闭前旧 PLAY 包再次进入

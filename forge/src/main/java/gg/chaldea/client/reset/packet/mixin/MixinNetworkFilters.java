@@ -38,7 +38,7 @@ public class MixinNetworkFilters {
                     LOGGER.debug("Injected {} into {}", filter, manager);
                 }
             } catch (Exception e) {
-                // P1-06 修复：原实现为空 catch 块，pipeline 可能处于半重置状态，
+                // 原实现为空 catch 块，pipeline 可能处于半重置状态，
                 // 随后表现为难以诊断的 packet decode、channel 缺失或连接挂起。
                 // 现在记录错误并断开连接，明确中止半重置的连接。
                 LOGGER.error("Failed to inject network filter {} into {}", key, manager, e);
